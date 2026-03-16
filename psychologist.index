@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>АРМ Психолога | Интернат</title>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script src="https://unpkg.com/dexie/dist/dexie.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/docx@8.2.2/build/index.js"></script>
+</head>
+<body class="bg-slate-50 font-sans">
+    <div id="app" class="flex h-screen overflow-hidden" v-cloak>
+        <aside class="w-72 bg-slate-900 text-slate-300 p-6 flex flex-col shadow-xl">
+            <div class="mb-10 text-white flex items-center gap-2">
+                <div class="w-8 h-8 bg-blue-500 rounded-lg flex items-center justify-center font-bold">Ψ</div>
+                <h1 class="text-lg font-bold tracking-tight">Рабочее место</h1>
+            </div>
+
+            <nav class="flex-1 space-y-1">
+                <button v-for="tab in tabs" :key="tab.id" @click="currentTab = tab.id"
+                    :class="['w-full text-left px-4 py-3 rounded-md transition-all', currentTab === tab.id ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/50' : 'hover:bg-slate-800']">
+                    {{ tab.name }}
+                </button>
+            </nav>
+
+            <div class="mt-auto space-y-3 pt-6 border-t border-slate-800 text-sm">
+                <button @click="syncToCloud" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white py-2.5 rounded-md font-medium flex items-center justify-center gap-2">
+                    <span>☁️</span> Облако (Яндекс)
+                </button>
+                <button @click="loadFromCloud" class="w-full bg-slate-700 hover:bg-slate-600 text-white py-2 rounded-md transition-colors">
+                    Загрузить из облака
+                </button>
+                <div class="text-[10px] text-slate-500 text-center uppercase tracking-widest">v 1.0.0 | Offline Ready</div>
+            </div>
+        </aside>
+
+        <main class="flex-1 flex flex-col overflow-hidden bg-white">
+            <header class="h-16 border-b flex items-center justify-between px-8 bg-white/80 backdrop-blur">
+                <h2 class="text-xl font-semibold text-slate-800">{{ currentTabName }}</h2>
+                <div class="flex gap-3">
+                    <button @click="exportJSON" class="px-3 py-1.5 text-sm border rounded hover:bg-slate-50">Экспорт базы</button>
+                    <button @click="openModal" class="bg-blue-600 hover:bg-blue-700 text-white px-5 py-2 rounded-md shadow-sm transition-transform active:scale-95">
+                        + Добавить запись
+                    </button>
+                </div>
+            </header>
+
+            <div class="flex-1 overflow-auto p-8">
+                <div class="border rounded-xl shadow-sm overflow-hidden">
+                    <table class="w-full text-left border-collapse">
+                        <thead class="bg-slate-50 text-slate-500 text-xs uppercase font-bold border-b">
+                            <tr>
+                                <th class="p-4 w-32">Дата</th>
+                                <th class="p-4 w-64">Клиент</th>
+                                <th class="p-4">Содержание / Кратко</th>
+                                <th class="p-4 w-40 text-right">Действия</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y text-slate-700">
+                            <tr v-for="item in items" :key="item.id" class="hover:bg-blue-50/30 transition-colors">
+                                <td class="p-4 text-sm whitespace-nowrap">{{ formatDate(item.date) }}</td>
+                                <td class="p-4 font-medium">{{ item.client }}</td>
+                                <td class="p-4 text-sm text-slate-500 truncate max-w-xs">{{ item.content || item.request || item.observations }}</td><td class="p-4 text-right space-x-2">
+                                    <button @click="downloadDoc(item)" class="text-blue-600 hover:text-blue-800 text-sm font-medium">DOCX</button>
+                                    <button @click="deleteItem(item.id)" class="text-red-400 hover:text-red-600 text-sm italic">Удалить</button>
+                                </td>
+                            </tr>
+                            <tr v-if="items.length === 0">
+                                <td colspan="4" class="p-20 text-center text-slate-400">В этом журнале пока нет записей</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </main>
+
+        <div v-if="showModal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+            <div class="bg-white rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden border">
+                <div class="p-6 border-b bg-slate-50 flex justify-between">
+                    <h3 class="font-bold text-slate-800 text-lg">Новая запись: {{ currentTabName }}</h3>
+                    <button @click="showModal = false" class="text-slate-400 hover:text-slate-600">✕</button>
+                </div>
+                <div class="p-6 space-y-4">
+                    <div class="grid grid-cols-2 gap-4">
+                        <div class="flex flex-col gap-1">
+                            <label class="text-xs font-bold text-slate-500 uppercase">Дата</label>
+                            <input v-model="form.date" type="date" class="border rounded-lg p-2.5 focus:ring-2 ring-blue-500 outline-none transition-all">
+                        </div>
+                        <div class="flex flex-col gap-1">
+                            <label class="text-xs font-bold text-slate-500 uppercase">Клиент (ФИО)</label>
+                            <input v-model="form.client" type="text" class="border rounded-lg p-2.5 focus:ring-2 ring-blue-500 outline-none">
+                        </div>
+                    </div>
+
+                    <div class="flex flex-col gap-1" v-for="field in dynamicFields" :key="field.key">
+                        <label class="text-xs font-bold text-slate-500 uppercase">{{ field.label }}</label>
+                        <textarea v-model="form[field.key]" rows="3" class="border rounded-lg p-2.5 focus:ring-2 ring-blue-500 outline-none"></textarea>
+                    </div>
+                </div>
+                <div class="p-6 bg-slate-50 flex justify-end gap-3 border-t">
+                    <button @click="showModal = false" class="px-4 py-2 text-slate-600 hover:bg-slate-200 rounded-lg transition-colors">Отмена</button>
+                    <button @click="saveEntry" class="bg-blue-600 text-white px-8 py-2 rounded-lg font-bold shadow-lg shadow-blue-600/30 hover:bg-blue-700 active:scale-95 transition-all">
+                        Сохранить в базу
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const { createApp, ref, computed, onMounted, watch } = Vue;
+
+        // 1. Настройка БД (IndexedDB)
+        const db = new Dexie("PsychologistWorkplace");
+        db.version(1).stores({
+            consultations: '++id, date, client',
+            diagnostics: '++id, date, client',
+            patronage: '++id, date, client',
+            lessons: '++id, date, client'
+        });
+
+        createApp({
+            setup() {
+                const currentTab = ref('consultations');
+                const showModal = ref(false);
+                const items = ref([]);
+                const form = ref({});
+
+                const tabs = [
+                    { id: 'consultations', name: 'Консультации', fields: [{key: 'request', label: 'Запрос'}, {key: 'content', label: 'Содержание'}, {key: 'result', label: 'Результат'}] },{ id: 'diagnostics', name: 'Диагностика', fields: [{key: 'methods', label: 'Методики'}, {key: 'conclusion', label: 'Заключение'}] },
+                    { id: 'patronage', name: 'Патронаж', fields: [{key: 'purpose', label: 'Цель'}, {key: 'observations', label: 'Наблюдения'}] },
+                    { id: 'lessons', name: 'Коррекц. занятия', fields: [{key: 'program', label: 'Программа'}, {key: 'progress', label: 'Ход занятия'}] }
+                ];
+
+                const currentTabName = computed(() => tabs.find(t => t.id === currentTab.value).name);
+                const dynamicFields = computed(() => tabs.find(t => t.id === currentTab.value).fields);
+
+                const loadData = async () => {
+                    items.value = await db[currentTab.value].orderBy('date').reverse().toArray();
+                };
+
+                watch(currentTab, loadData);
+
+                const openModal = () => {
+                    form.value = { date: new Date().toISOString().split('T')[0], client: '' };
+                    showModal.value = true;
+                };
+
+                const saveEntry = async () => {
+                    await db[currentTab.value].add({ ...form.value });
+                    showModal.value = false;
+                    await loadData();
+                };
+
+                const deleteItem = async (id) => {
+                    if(confirm("Удалить запись безвозвратно?")) {
+                        await db[currentTab.value].delete(id);
+                        await loadData();
+                    }
+                };
+
+                // 2. СИНХРОНИЗАЦИЯ (ЯНДЕКС.ДИСК)
+                const Y_TOKEN = "y0__xDK6dTEBBiS_z4gxrzY4RYwzYO1rgh_qP4PFjNk5gM-6qh4F94uEJpT3g";
+
+                const syncToCloud = async () => {
+                    try {
+                        const data = {
+                            consultations: await db.consultations.toArray(),
+                            diagnostics: await db.diagnostics.toArray(),
+                            patronage: await db.patronage.toArray(),
+                            lessons: await db.lessons.toArray(),
+                            ts: Date.now()
+                        };
+
+                        const uploadUrlRes = await fetch(`https://cloud-api.yandex.net/v1/disk/resources/upload?path=app:/data.json&overwrite=true`, {
+                            headers: { Authorization: `OAuth ${Y_TOKEN}` }
+                        });
+                        const { href } = await uploadUrlRes.json();
+
+                        await fetch(href, { method: 'PUT', body: JSON.stringify(data) });
+                        alert("✅ Синхронизация завершена успешно!");
+                    } catch (e) { alert("❌ Ошибка при связи с Яндекс.Диском"); }
+                };
+
+                const loadFromCloud = async () => {
+                    if(!confirm("Это заменит все локальные данные данными из облака. Продолжить?")) return;
+                    try {
+                        const downUrlRes = await fetch(`https://cloud-api.yandex.net/v1/disk/resources/download?path=app:/data.json`, {
+                            headers: { Authorization: `OAuth ${Y_TOKEN}` }
+                        });
+                        const { href } = await downUrlRes.json();
+                        const cloudData = await (await fetch(href)).json();
+
+                        await db.transaction('rw', db.consultations, db.diagnostics, db.patronage, db.lessons, async () => {
+                            await db.consultations.clear(); await db.consultations.bulkAdd(cloudData.consultations);
+                            await db.diagnostics.clear(); await db.diagnostics.bulkAdd(cloudData.diagnostics);
+                            await db.patronage.clear(); await db.patronage.bulkAdd(cloudData.patronage);
+                            await db.lessons.clear(); await db.lessons.bulkAdd(cloudData.lessons);
+                        });{ id: 'diagnostics', name: 'Диагностика', fields: [{key: 'methods', label: 'Методики'}, {key: 'conclusion', label: 'Заключение'}] },
+                    { id: 'patronage', name: 'Патронаж', fields: [{key: 'purpose', label: 'Цель'}, {key: 'observations', label: 'Наблюдения'}] },
+                    { id: 'lessons', name: 'Коррекц. занятия', fields: [{key: 'program', label: 'Программа'}, {key: 'progress', label: 'Ход занятия'}] }
+                ];
+
+                const currentTabName = computed(() => tabs.find(t => t.id === currentTab.value).name);
+                const dynamicFields = computed(() => tabs.find(t => t.id === currentTab.value).fields);
+
+                const loadData = async () => {
+                    items.value = await db[currentTab.value].orderBy('date').reverse().toArray();
+                };
+
+                watch(currentTab, loadData);
+
+                const openModal = () => {
+                    form.value = { date: new Date().toISOString().split('T')[0], client: '' };
+                    showModal.value = true;
+                };
+
+                const saveEntry = async () => {
+                    await db[currentTab.value].add({ ...form.value });
+                    showModal.value = false;
+                    await loadData();
+                };
+
+                const deleteItem = async (id) => {
+                    if(confirm("Удалить запись безвозвратно?")) {
+                        await db[currentTab.value].delete(id);
+                        await loadData();
+                    }
+                };
+
+                // 2. СИНХРОНИЗАЦИЯ (ЯНДЕКС.ДИСК)
+                const Y_TOKEN = "y0__xDK6dTEBBiS_z4gxrzY4RYwzYO1rgh_qP4PFjNk5gM-6qh4F94uEJpT3g";
+
+                const syncToCloud = async () => {
+                    try {
+                        const data = {
+                            consultations: await db.consultations.toArray(),
+                            diagnostics: await db.diagnostics.toArray(),
+                            patronage: await db.patronage.toArray(),
+                            lessons: await db.lessons.toArray(),
+                            ts: Date.now()
+                        };
+
+                        const uploadUrlRes = await fetch(`https://cloud-api.yandex.net/v1/disk/resources/upload?path=app:/data.json&overwrite=true`, {
+                            headers: { Authorization: `OAuth ${Y_TOKEN}` }
+                        });
+                        const { href } = await uploadUrlRes.json();
+
+                        await fetch(href, { method: 'PUT', body: JSON.stringify(data) });
+                        alert("✅ Синхронизация завершена успешно!");
+                    } catch (e) { alert("❌ Ошибка при связи с Яндекс.Диском"); }
+                };
+
+                const loadFromCloud = async () => {
+                    if(!confirm("Это заменит все локальные данные данными из облака. Продолжить?")) return;
+                    try {
+                        const downUrlRes = await fetch(`https://cloud-api.yandex.net/v1/disk/resources/download?path=app:/data.json`, {
+                            headers: { Authorization: `OAuth ${Y_TOKEN}` }
+                        });
+                        const { href } = await downUrlRes.json();
+                        const cloudData = await (await fetch(href)).json();
+
+                        await db.transaction('rw', db.consultations, db.diagnostics, db.patronage, db.lessons, async () => {
+                            await db.consultations.clear(); await db.consultations.bulkAdd(cloudData.consultations);
+                            await db.diagnostics.clear(); await db.diagnostics.bulkAdd(cloudData.diagnostics);
+                            await db.patronage.clear(); await db.patronage.bulkAdd(cloudData.patronage);
+                            await db.lessons.clear(); await db.lessons.bulkAdd(cloudData.lessons);
+                        });alert("✅ Данные загружены!");
+                        location.reload();
+                    } catch (e) { alert("❌ В облаке не найдено сохраненных данных"); }
+                };
+
+                // 3. ЭКСПОРТ В DOCX
+                const downloadDoc = async (item) => {
+                    const doc = new docx.Document({
+                        sections: [{
+                            children: [
+                                new docx.Paragraph({ text: currentTabName.value, heading: docx.HeadingLevel.HEADING_1 }),
+                                new docx.Paragraph({ text: `Дата: ${item.date}` }),
+                                new docx.Paragraph({ text: `Клиент: ${item.client}` }),
+                                ...dynamicFields.value.map(f => new docx.Paragraph({ text: `${f.label}: ${item[f.key] || '---'}` }))
+                            ]
+                        }]
+                    });
+                    const blob = await docx.Packer.toBlob(doc);
+                    const a = document.createElement("a");
+                    a.href = URL.createObjectURL(blob);
+                    a.download = `Отчет_${item.client}_${item.date}.docx`;
+                    a.click();
+                };
+
+                const formatDate = (d) => new Date(d).toLocaleDateString('ru-RU');
+
+                onMounted(loadData);
+
+                return { currentTab, tabs, currentTabName, items, showModal, form, dynamicFields, openModal, saveEntry, deleteItem, syncToCloud, loadFromCloud, downloadDoc, formatDate };
+            }
+        }).mount('#app');
+    </script>
+    <style> [v-cloak] { display: none; } </style>
+</body>
+</html>
